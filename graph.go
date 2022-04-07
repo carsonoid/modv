@@ -2,9 +2,9 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"text/template"
 )
@@ -30,52 +30,118 @@ type ModuleGraph struct {
 
 	Mods         map[string]int
 	Dependencies map[int][]int
+	Filter       string
 }
 
-func NewModuleGraph(r io.Reader) *ModuleGraph {
+func NewModuleGraph(r io.Reader, filter string) *ModuleGraph {
 	return &ModuleGraph{
 		Reader: r,
 
 		Mods:         make(map[string]int),
 		Dependencies: make(map[int][]int),
+		Filter:       filter,
 	}
 }
 
 func (m *ModuleGraph) Parse() error {
-	bufReader := bufio.NewReader(m.Reader)
+	deps, err := GetDepPairs(m.Reader)
+	if err != nil {
+		return err
+	}
+
+	if m.Filter != "" {
+		s := NewSearcher()
+		deps = s.Filter(deps, m.Filter)
+
+		// sort deps by number of @ signs
+		sort.Slice(deps, func(i, j int) bool {
+			return strings.Count(deps[i].mod, "@") < strings.Count(deps[j].mod, "@")
+		})
+	}
 
 	serialID := 1
-	for {
-		relationBytes, err := bufReader.ReadBytes('\n')
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-
-		relation := bytes.Split(relationBytes, []byte(" "))
-		mod, depMod := strings.TrimSpace(string(relation[0])), strings.TrimSpace(string(relation[1]))
-
-		mod = strings.Replace(mod, "@", "\n", 1)
-		depMod = strings.Replace(depMod, "@", "\n", 1)
-
-		modId, ok := m.Mods[mod]
+	for _, dep := range deps {
+		modId, ok := m.Mods[dep.mod]
 		if !ok {
 			modId = serialID
-			m.Mods[mod] = modId
+			m.Mods[dep.mod] = modId
 			serialID += 1
 		}
 
-		depModId, ok := m.Mods[depMod]
+		depModId, ok := m.Mods[dep.dep]
 		if !ok {
 			depModId = serialID
-			m.Mods[depMod] = depModId
+			m.Mods[dep.dep] = depModId
 			serialID += 1
 		}
 
 		m.Dependencies[modId] = append(m.Dependencies[modId], depModId)
 	}
+
+	return nil
+}
+
+type DepPair struct {
+	mod, dep string
+}
+
+// String func for deppair
+func (d *DepPair) String() string {
+	return fmt.Sprintf("%s -> %s", d.mod, d.dep)
+}
+
+// GetDepPairs returns a list of all modules and their dependencies
+func GetDepPairs(r io.Reader) ([]*DepPair, error) {
+	var pairs []*DepPair
+
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		relation := strings.Split(line, " ")
+		mod, depMod := strings.TrimSpace(string(relation[0])), strings.TrimSpace(string(relation[1]))
+
+		pairs = append(pairs, &DepPair{mod, depMod})
+	}
+
+	return pairs, scanner.Err()
+}
+
+type Searcher struct {
+	searched map[string]struct{}
+}
+
+// new searcher
+func NewSearcher() *Searcher {
+	return &Searcher{
+		searched: make(map[string]struct{}),
+	}
+}
+
+// Filter out modules that are not used by the given modules
+// order is not preserved
+func (s *Searcher) Filter(pairs []*DepPair, findMod string) []*DepPair {
+	var ret []*DepPair
+
+	for _, user := range GetUsers(pairs, findMod) {
+		if _, ok := s.searched[user.mod]; !ok {
+			s.searched[user.mod] = struct{}{}
+			ret = append(ret, user)
+			ret = append(ret, s.Filter(pairs, user.mod)...)
+		}
+	}
+
+	return ret
+}
+
+// GetUsers returns all modules that depend on the given module
+func GetUsers(pairs []*DepPair, findMod string) []*DepPair {
+	var ret []*DepPair
+	for _, pair := range pairs {
+		if pair.dep == findMod {
+			ret = append(ret, pair)
+		}
+	}
+	return ret
 }
 
 func (m *ModuleGraph) Render(w io.Writer) error {

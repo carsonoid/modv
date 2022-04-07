@@ -34,7 +34,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	mg := NewModuleGraph(os.Stdin)
+	// filter is the first os arg if given
+	filter := ""
+	if len(os.Args) > 1 {
+		filter = os.Args[1]
+	}
+
+	mg := NewModuleGraph(os.Stdin, filter)
 	if err := mg.Parse(); err != nil {
 		fmt.Println("mg.Parse: ", err)
 		PrintUsage()
