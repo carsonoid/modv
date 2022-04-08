@@ -1,3 +1,3 @@
-module github.com/poloxue/modv
+module github.com/carsonoid/modv
 
 go 1.18
